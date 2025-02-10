@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>공유 화면 보호기</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: #000;
+      font-family: sans-serif;
+    }
+    canvas {
+      display: block;
+    }
+    /* 모달창 스타일 */
+    #modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+    }
+    #modalContent {
+      background: #fff;
+      padding: 20px;
+      border-radius: 5px;
+      text-align: center;
+    }
+    #modalContent input {
+      display: block;
+      width: 300px;
+      margin: 10px auto;
+      padding: 8px;
+      font-size: 16px;
+    }
+    #modalContent button {
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <!-- 모달창: 닉네임과 이미지 URL 입력 -->
+  <div id="modal">
+    <div id="modalContent">
+      <h2>정보 입력</h2>
+      <input type="text" id="nicknameInput" placeholder="닉네임을 입력하세요" />
+      <input type="text" id="imageUrlInput" placeholder="이미지 URL (빈 값이면 기본 이미지)" />
+      <button id="submitBtn">시작하기</button>
+    </div>
+  </div>
+  <canvas id="canvas"></canvas>
+  
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    // 모달창 요소
+    const modal = document.getElementById('modal');
+    const nicknameInput = document.getElementById('nicknameInput');
+    const imageUrlInput = document.getElementById('imageUrlInput');
+    const submitBtn = document.getElementById('submitBtn');
+
+    let userNickname = "";
+    let userImageUrl = "";
+
+    submitBtn.addEventListener('click', () => {
+      userNickname = nicknameInput.value.trim() || "익명";
+      userImageUrl = imageUrlInput.value.trim() || "";
+      socket.emit('join', { imageUrl: userImageUrl, nickname: userNickname });
+      modal.style.display = 'none';
+    });
+
+    let isBoid = false;
+    socket.on('boidStatus', data => { isBoid = data.isBoid; });
+
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let width = canvas.width = window.innerWidth;
+    let height = canvas.height = window.innerHeight;
+    window.addEventListener('resize', () => {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    });
+
+    class Boid {
+      constructor(id, imageUrl, nickname) {
+        this.id = id;
+        this.imageUrl = imageUrl;
+        this.nickname = nickname;
+        this.position = { x: Math.random() * width, y: Math.random() * height };
+        const angle = Math.random() * 2 * Math.PI;
+        this.velocity = { x: Math.cos(angle), y: Math.sin(angle) };
+        this.acceleration = { x: 0, y: 0 };
+        this.maxSpeed = 4;
+        this.maxForce = 0.03;
+        this.size = 50; // Boid 크기를 50픽셀로 설정
+        this.image = new Image();
+        this.image.src = imageUrl;
+      }
+      applyForce(force) {
+        this.acceleration.x += force.x;
+        this.acceleration.y += force.y;
+      }
+      update() {
+        // 속도 업데이트
+        this.velocity.x += this.acceleration.x;
+        this.velocity.y += this.acceleration.y;
+        // 약간의 마찰 적용 (0.99)
+        // this.velocity.x *= 0.99;
+        // this.velocity.y *= 0.99;
+        const speed = Math.hypot(this.velocity.x, this.velocity.y);
+        // 만약 속도가 너무 낮으면 랜덤 wander 힘을 추가하여 계속 움직이게 함
+        if (speed < 0.5) {
+          const randomAngle = Math.random() * 2 * Math.PI;
+          this.applyForce({ x: Math.cos(randomAngle) * 0.05, y: Math.sin(randomAngle) * 0.05 });
+        }
+        // 최대 속도 제한
+        if (speed > this.maxSpeed) {
+          this.velocity.x = (this.velocity.x / speed) * this.maxSpeed;
+          this.velocity.y = (this.velocity.y / speed) * this.maxSpeed;
+        }
+        this.position.x += this.velocity.x;
+        this.position.y += this.velocity.y;
+        // 화면 경계 처리 (wrap-around)
+        if (this.position.x < 0) this.position.x = width;
+        if (this.position.y < 0) this.position.y = height;
+        if (this.position.x > width) this.position.x = 0;
+        if (this.position.y > height) this.position.y = 0;
+        // 가속도 초기화
+        this.acceleration.x = 0;
+        this.acceleration.y = 0;
+      }
+      align(boids) {
+        const perceptionRadius = 50;
+        let steering = { x: 0, y: 0 }, total = 0;
+        for (let other of boids) {
+          if (other.id !== this.id) {
+            const d = Math.hypot(this.position.x - other.position.x, this.position.y - other.position.y);
+            if (d < perceptionRadius) {
+              steering.x += other.velocity.x;
+              steering.y += other.velocity.y;
+              total++;
+            }
+          }
+        }
+        if (total > 0) {
+          steering.x /= total;
+          steering.y /= total;
+          const mag = Math.hypot(steering.x, steering.y);
+          if (mag > 0) {
+            steering.x = (steering.x / mag) * this.maxSpeed;
+            steering.y = (steering.y / mag) * this.maxSpeed;
+          }
+          steering.x -= this.velocity.x;
+          steering.y -= this.velocity.y;
+          const steerMag = Math.hypot(steering.x, steering.y);
+          if (steerMag > this.maxForce) {
+            steering.x = (steering.x / steerMag) * this.maxForce;
+            steering.y = (steering.y / steerMag) * this.maxForce;
+          }
+        }
+        return steering;
+      }
+      cohere(boids) {
+        const perceptionRadius = 50;
+        let steering = { x: 0, y: 0 }, total = 0;
+        for (let other of boids) {
+          if (other.id !== this.id) {
+            const d = Math.hypot(this.position.x - other.position.x, this.position.y - other.position.y);
+            if (d < perceptionRadius) {
+              steering.x += other.position.x;
+              steering.y += other.position.y;
+              total++;
+            }
+          }
+        }
+        if (total > 0) {
+          steering.x /= total;
+          steering.y /= total;
+          steering.x -= this.position.x;
+          steering.y -= this.position.y;
+          const mag = Math.hypot(steering.x, steering.y);
+          if (mag > 0) {
+            steering.x = (steering.x / mag) * this.maxSpeed;
+            steering.y = (steering.y / mag) * this.maxSpeed;
+          }
+          steering.x -= this.velocity.x;
+          steering.y -= this.velocity.y;
+          const steerMag = Math.hypot(steering.x, steering.y);
+          if (steerMag > this.maxForce) {
+            steering.x = (steering.x / steerMag) * this.maxForce;
+            steering.y = (steering.y / steerMag) * this.maxForce;
+          }
+        }
+        return steering;
+      }
+      separate(boids) {
+        const perceptionRadius = 25;
+        let steering = { x: 0, y: 0 }, total = 0;
+        for (let other of boids) {
+          if (other.id !== this.id) {
+            const d = Math.hypot(this.position.x - other.position.x, this.position.y - other.position.y);
+            if (d < perceptionRadius) {
+              let diff = {
+                x: this.position.x - other.position.x,
+                y: this.position.y - other.position.y
+              };
+              if (d > 0) {
+                diff.x /= d;
+                diff.y /= d;
+              }
+              steering.x += diff.x;
+              steering.y += diff.y;
+              total++;
+            }
+          }
+        }
+        if (total > 0) {
+          steering.x /= total;
+          steering.y /= total;
+          const mag = Math.hypot(steering.x, steering.y);
+          if (mag > 0) {
+            steering.x = (steering.x / mag) * this.maxSpeed;
+            steering.y = (steering.y / mag) * this.maxSpeed;
+          }
+          steering.x -= this.velocity.x;
+          steering.y -= this.velocity.y;
+          const steerMag = Math.hypot(steering.x, steering.y);
+          if (steerMag > this.maxForce) {
+            steering.x = (steering.x / steerMag) * this.maxForce;
+            steering.y = (steering.y / steerMag) * this.maxForce;
+          }
+        }
+        return steering;
+      }
+      flock(boids) {
+        let alignment = this.align(boids);
+        let cohesion = this.cohere(boids);
+        let separation = this.separate(boids);
+        alignment.x *= 1.0;
+        alignment.y *= 1.0;
+        cohesion.x *= 0.8;
+        cohesion.y *= 0.8;
+        separation.x *= 1.5;
+        separation.y *= 1.5;
+        this.applyForce(alignment);
+        this.applyForce(cohesion);
+        this.applyForce(separation);
+      }
+      draw() {
+        if (!this.image.complete) return;
+        const angle = Math.atan2(this.velocity.y, this.velocity.x);
+        ctx.save();
+        ctx.translate(this.position.x, this.position.y);
+        ctx.rotate(angle);
+        ctx.drawImage(this.image, -this.size/2, -this.size/2, this.size, this.size);
+        ctx.restore();
+        // 닉네임은 Boid 위쪽에 표시 (Boid 크기의 절반 위에 10픽셀 오프셋)
+        ctx.font = "16px sans-serif";
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center";
+        ctx.fillText(this.nickname, this.position.x, this.position.y - this.size/2 - 10);
+      }
+    }
+    
+    let boids = [];
+    
+    socket.on('currentUsers', data => {
+      data.forEach(user => {
+        if (!boids.find(b => b.id === user.id)) {
+          boids.push(new Boid(user.id, user.imageUrl, user.nickname));
+        }
+      });
+    });
+    
+    socket.on('userJoined', data => {
+      if (data.isBoid && !boids.find(b => b.id === data.id)) {
+        boids.push(new Boid(data.id, data.imageUrl, data.nickname));
+      }
+    });
+    
+    socket.on('userLeft', data => {
+      boids = boids.filter(b => b.id !== data.id);
+    });
+    
+    function animate() {
+      requestAnimationFrame(animate);
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, width, height);
+      boids.forEach(boid => {
+        boid.flock(boids);
+        boid.update();
+        boid.draw();
+      });
+    }
+    animate();
+  </script>
+</body>
+</html>

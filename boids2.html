@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>어항 화면 보호기</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: #000;
+    }
+    canvas {
+      display: block;
+    }
+    audio {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <audio id="lofiAudio" src="lofi.mp3" autoplay loop></audio>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let width = canvas.width = window.innerWidth;
+    let height = canvas.height = window.innerHeight;
+
+    window.addEventListener('resize', () => {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    });
+
+    // 클라운피쉬 이미지 로드 (현재 파일 경로에 clownfish.png가 있어야 함)
+    const fishImage = new Image();
+    fishImage.src = 'clownfish.svg';
+
+    class Boid {
+      constructor() {
+        this.position = {
+          x: Math.random() * width,
+          y: Math.random() * height
+        };
+        const angle = Math.random() * 2 * Math.PI;
+        this.velocity = {
+          x: Math.cos(angle),
+          y: Math.sin(angle)
+        };
+        this.acceleration = { x: 0, y: 0 };
+        this.maxSpeed = 2;
+        this.maxForce = 0.03;
+      }
+
+      flock(boids) {
+        let alignment = this.align(boids);
+        let cohesion = this.cohere(boids);
+        let separation = this.separate(boids);
+
+        alignment.x *= 1.0;
+        alignment.y *= 1.0;
+        cohesion.x *= 0.8;
+        cohesion.y *= 0.8;
+        separation.x *= 1.5;
+        separation.y *= 1.5;
+
+        this.applyForce(alignment);
+        this.applyForce(cohesion);
+        this.applyForce(separation);
+      }
+
+      applyForce(force) {
+        this.acceleration.x += force.x;
+        this.acceleration.y += force.y;
+      }
+
+      update() {
+        this.velocity.x += this.acceleration.x;
+        this.velocity.y += this.acceleration.y;
+        const speed = Math.hypot(this.velocity.x, this.velocity.y);
+        if (speed > this.maxSpeed) {
+          this.velocity.x = (this.velocity.x / speed) * this.maxSpeed;
+          this.velocity.y = (this.velocity.y / speed) * this.maxSpeed;
+        }
+        this.position.x += this.velocity.x;
+        this.position.y += this.velocity.y;
+        // 화면 경계 처리 (wrap-around)
+        if (this.position.x < 0) this.position.x = width;
+        if (this.position.y < 0) this.position.y = height;
+        if (this.position.x > width) this.position.x = 0;
+        if (this.position.y > height) this.position.y = 0;
+        this.acceleration.x = 0;
+        this.acceleration.y = 0;
+      }
+
+      align(boids) {
+        let perceptionRadius = 50;
+        let steering = { x: 0, y: 0 };
+        let total = 0;
+        for (let other of boids) {
+          const d = Math.hypot(this.position.x - other.position.x, this.position.y - other.position.y);
+          if (other !== this && d < perceptionRadius) {
+            steering.x += other.velocity.x;
+            steering.y += other.velocity.y;
+            total++;
+          }
+        }
+        if (total > 0) {
+          steering.x /= total;
+          steering.y /= total;
+          const mag = Math.hypot(steering.x, steering.y);
+          if (mag > 0) {
+            steering.x = (steering.x / mag) * this.maxSpeed;
+            steering.y = (steering.y / mag) * this.maxSpeed;
+          }
+          steering.x -= this.velocity.x;
+          steering.y -= this.velocity.y;
+          const steerMag = Math.hypot(steering.x, steering.y);
+          if (steerMag > this.maxForce) {
+            steering.x = (steering.x / steerMag) * this.maxForce;
+            steering.y = (steering.y / steerMag) * this.maxForce;
+          }
+        }
+        return steering;
+      }
+
+      cohere(boids) {
+        let perceptionRadius = 50;
+        let steering = { x: 0, y: 0 };
+        let total = 0;
+        for (let other of boids) {
+          const d = Math.hypot(this.position.x - other.position.x, this.position.y - other.position.y);
+          if (other !== this && d < perceptionRadius) {
+            steering.x += other.position.x;
+            steering.y += other.position.y;
+            total++;
+          }
+        }
+        if (total > 0) {
+          steering.x /= total;
+          steering.y /= total;
+          steering.x -= this.position.x;
+          steering.y -= this.position.y;
+          const mag = Math.hypot(steering.x, steering.y);
+          if (mag > 0) {
+            steering.x = (steering.x / mag) * this.maxSpeed;
+            steering.y = (steering.y / mag) * this.maxSpeed;
+          }
+          steering.x -= this.velocity.x;
+          steering.y -= this.velocity.y;
+          const steerMag = Math.hypot(steering.x, steering.y);
+          if (steerMag > this.maxForce) {
+            steering.x = (steering.x / steerMag) * this.maxForce;
+            steering.y = (steering.y / steerMag) * this.maxForce;
+          }
+        }
+        return steering;
+      }
+
+      separate(boids) {
+        let perceptionRadius = 25;
+        let steering = { x: 0, y: 0 };
+        let total = 0;
+        for (let other of boids) {
+          const d = Math.hypot(this.position.x - other.position.x, this.position.y - other.position.y);
+          if (other !== this && d < perceptionRadius) {
+            let diff = {
+              x: this.position.x - other.position.x,
+              y: this.position.y - other.position.y
+            };
+            if (d > 0) {
+              diff.x /= d;
+              diff.y /= d;
+            }
+            steering.x += diff.x;
+            steering.y += diff.y;
+            total++;
+          }
+        }
+        if (total > 0) {
+          steering.x /= total;
+          steering.y /= total;
+          const mag = Math.hypot(steering.x, steering.y);
+          if (mag > 0) {
+            steering.x = (steering.x / mag) * this.maxSpeed;
+            steering.y = (steering.y / mag) * this.maxSpeed;
+          }
+          steering.x -= this.velocity.x;
+          steering.y -= this.velocity.y;
+          const steerMag = Math.hypot(steering.x, steering.y);
+          if (steerMag > this.maxForce) {
+            steering.x = (steering.x / steerMag) * this.maxForce;
+            steering.y = (steering.y / steerMag) * this.maxForce;
+          }
+        }
+        return steering;
+      }
+
+      // 이미지를 점 크기로 (약 6x6 픽셀) 그리고 이동 방향에 따라 회전
+      draw() {
+        if (!fishImage.complete) return;
+        const angle = Math.atan2(this.velocity.y, this.velocity.x);
+        const fishSize = 35; // 점과 같은 크기로 설정 (지름 6픽셀)
+        ctx.save();
+        ctx.translate(this.position.x, this.position.y);
+        ctx.rotate(angle);
+        ctx.drawImage(fishImage, -fishSize / 2, -fishSize / 2, fishSize, fishSize);
+        ctx.restore();
+      }
+    }
+
+    const boids = [];
+    const boidCount = 30;
+    for (let i = 0; i < boidCount; i++) {
+      boids.push(new Boid());
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      // 어항을 연상시키는 그라디언트 배경 생성
+    //   let gradient = ctx.createLinearGradient(0, 0, 0, height);
+    //   gradient.addColorStop(0, "#003366");
+    //   gradient.addColorStop(0.5, "#0074D9");
+    //   gradient.addColorStop(1, "#7FDBFF");
+    //   ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, width, height);
+
+      for (let boid of boids) {
+        boid.flock(boids);
+        boid.update();
+        boid.draw();
+      }
+    }
+
+    animate();
+  </script>
+</body>
+</html>
